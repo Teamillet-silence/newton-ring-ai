@@ -167,10 +167,9 @@ def _find_rings(ratio, max_r):
     if not peaks:
         return []
 
-    # 合并 12px 内相邻的两个峰（保留较高的）
     merged = [peaks[0]]
     for p in peaks[1:]:
-        if p - merged[-1] <= 12:
+        if p - merged[-1] <= 1:
             if ratio[p] > ratio[merged[-1]]:
                 merged[-1] = p
         else:
