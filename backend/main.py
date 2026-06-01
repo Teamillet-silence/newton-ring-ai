@@ -118,81 +118,59 @@ $$
 @app.post("/upload")
 async def upload_image(file: UploadFile = File(...)):
 
-    # 读取图片
     contents = await file.read()
-
-    # numpy转换
     np_array = np.frombuffer(contents, np.uint8)
-
-    # OpenCV解码
     image = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
 
-    # 判断读取
     if image is None:
+        return {"success": False, "message": "图片读取失败"}
 
-        return {
-            "success": False,
-            "message": "图片读取失败"
-        }
+    height, width = image.shape[:2]
+    center_x, center_y = width // 2, height // 2
 
-    # 灰度化
-    gray = cv2.cvtColor(
-        image,
-        cv2.COLOR_BGR2GRAY
+    # 灰度 + 高斯模糊
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (7, 7), 0)
+
+    # 自适应阈值（处理颜色深浅不一的问题）
+    binary = cv2.adaptiveThreshold(
+        blur, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV, 51, 5
     )
 
-    # 获取尺寸
-    height, width = gray.shape
+    # 形态学去噪
+    kernel = np.ones((3, 3), np.uint8)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
 
-    # 中心点
-    center_x = width // 2
-    center_y = height // 2
+    # 从中心向多个方向扫描，取平均值
+    directions = 8
+    total_rings = 0
 
-    # 高斯模糊
-    blur = cv2.GaussianBlur(
-        gray,
-        (5, 5),
-        0
-    )
+    for i in range(directions):
+        angle = 2 * np.pi * i / directions
+        rings = 0
+        prev = 0
 
-    # 从中心向右扫描
-    scan_line = blur[center_y, center_x:]
+        for r in range(10, min(width, height) // 2, 2):
+            x = int(center_x + r * np.cos(angle))
+            y = int(center_y + r * np.sin(angle))
 
-    # 自动阈值
-    threshold = np.mean(scan_line)
+            if x < 0 or x >= width or y < 0 or y >= height:
+                break
 
-    # 二值化
-    binary = []
+            val = binary[y, x] // 255
+            if val != prev:
+                rings += 1
+                prev = val
 
-    for pixel in scan_line:
+        total_rings += rings // 2
 
-        if pixel < threshold:
-
-            binary.append(1)
-
-        else:
-
-            binary.append(0)
-
-    # 统计变化次数
-    transitions = 0
-
-    for i in range(1, len(binary)):
-
-        if binary[i] != binary[i - 1]:
-
-            transitions += 1
-
-    # 一个暗环大约对应两次变化
-    ring_count = transitions // 2
-
-    # 防止误判
+    ring_count = round(total_rings / directions)
     if ring_count < 0:
         ring_count = 0
 
-    # =========================
-    # 返回结果
-    # =========================
     return {
         "success": True,
         "rings": ring_count,
