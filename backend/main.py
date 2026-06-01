@@ -140,7 +140,7 @@ def _find_rings(ratio, max_r):
     ratio = np.convolve(ratio, np.ones(15) / 15, mode="same")
     thr = np.mean(ratio) + np.std(ratio) * 0.2
 
-    # 找局部峰值，相邻峰值间距至少 20px
+    # 找局部峰值，相邻峰值间距至少 15px
     peaks = []
     i = min_r
     while i < max_r_inner - 1:
@@ -155,7 +155,7 @@ def _find_rings(ratio, max_r):
             if prominence > np.std(ratio) * 0.2:
                 peaks.append(peak_idx)
 
-            i = peak_idx + 20
+            i = peak_idx + 12
         else:
             i += 1
 
@@ -167,10 +167,10 @@ def _find_rings(ratio, max_r):
     if not peaks:
         return []
 
-    # 合并 25px 内相邻的两个峰（保留较高的），特别近的环算一个
+    # 合并 12px 内相邻的两个峰（保留较高的）
     merged = [peaks[0]]
     for p in peaks[1:]:
-        if p - merged[-1] <= 25:
+        if p - merged[-1] <= 12:
             if ratio[p] > ratio[merged[-1]]:
                 merged[-1] = p
         else:
