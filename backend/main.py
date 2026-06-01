@@ -142,19 +142,30 @@ def _detect_rings(gray):
     # 4) 平滑 + 找峰
     ratio = np.convolve(ratio, np.ones(7) / 7, mode="same")
 
+    # 跳过中心暗斑（~30px）
+    min_r = 30
+    if max_r <= min_r:
+        return 0, "检测到约 0 个暗环"
+
     thr = np.mean(ratio) + np.std(ratio) * 0.3
-    above = ratio > thr
 
-    rings = 0
-    in_ring = False
-    for i in range(max_r):
-        if above[i] and not in_ring:
-            rings += 1
-            in_ring = True
-        elif not above[i]:
-            in_ring = False
+    # 找局部峰值
+    peaks = []
+    for i in range(min_r + 1, max_r - 1):
+        if ratio[i] > thr and ratio[i] >= ratio[i - 1] and ratio[i] > ratio[i + 1]:
+            peaks.append(i)
 
-    return rings, f"检测到约 {rings} 个暗环"
+    # 合并 5px 内的相邻峰值（保留较高的）
+    merged = []
+    for p in peaks:
+        if merged and p - merged[-1] <= 5:
+            if ratio[p] > ratio[merged[-1]]:
+                merged[-1] = p
+        else:
+            merged.append(p)
+
+    ring_count = len(merged)
+    return ring_count, f"检测到约 {ring_count} 个暗环"
 
 
 @app.post("/preview-binary")
@@ -203,25 +214,27 @@ async def preview_binary(file: UploadFile = File(...)):
     ratio = black_count.astype(np.float32) / total_count.astype(np.float32)
     ratio = np.convolve(ratio, np.ones(7) / 7, mode="same")
 
+    # 跳过中心暗斑（~30px）
+    min_r = 30
     thr = np.mean(ratio) + np.std(ratio) * 0.3
-    above = ratio > thr
 
-    # 找到每个环的半径范围，画实心圆环
+    peaks = []
+    for i in range(min_r + 1, max_r - 1):
+        if ratio[i] > thr and ratio[i] >= ratio[i - 1] and ratio[i] > ratio[i + 1]:
+            peaks.append(i)
+
+    merged = []
+    for p in peaks:
+        if merged and p - merged[-1] <= 5:
+            if ratio[p] > ratio[merged[-1]]:
+                merged[-1] = p
+        else:
+            merged.append(p)
+
+    # 画细线圆环
     binary_out = np.ones((h, w), dtype=np.uint8) * 255
-
-    in_ring = False
-    start_r = 0
-    for i in range(1, max_r):
-        if above[i] and not in_ring:
-            start_r = i
-            in_ring = True
-        elif not above[i] and in_ring:
-            # 画一个较粗的圆环
-            cv2.circle(binary_out, (cx, cy), (start_r + i) // 2, 0, max(2, i - start_r))
-            in_ring = False
-
-    if in_ring:
-        cv2.circle(binary_out, (cx, cy), (start_r + max_r) // 2, 0, max(2, max_r - start_r))
+    for r in merged:
+        cv2.circle(binary_out, (cx, cy), r, 0, 2)
 
     _, buffer = cv2.imencode(".png", binary_out)
     return Response(content=buffer.tobytes(), media_type="image/png")
