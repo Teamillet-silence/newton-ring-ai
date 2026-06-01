@@ -136,6 +136,10 @@ def _detect_rings(gray):
     detail = cv2.normalize(detail, None, 0, 255, cv2.NORM_MINMAX)
     _, binary = cv2.threshold(detail, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
+    # 确保背景白色(255)、暗环黑色(0)
+    if binary[cy, cx] == 0:
+        binary = 255 - binary
+
     # 5. 多方向扫描（原方法）
     directions = 12
     all_counts = []
