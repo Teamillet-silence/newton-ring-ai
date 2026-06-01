@@ -217,7 +217,7 @@ $$
                   <img
                     src={binaryPreview}
                     alt="黑白预览"
-                    style={{ width: "100%", marginTop: 8, borderRadius: 6 }}
+                    style={{ width: 200, marginTop: 8, borderRadius: 6 }}
                   />
                 )}
 
