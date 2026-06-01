@@ -134,8 +134,7 @@ def _binary_to_radial_profile(gray, cx, cy, max_r):
 
 def _find_rings(ratio, max_r):
     """从径向轮廓中找暗环，返回每个环的半径"""
-    # 轻微跳过中心（避免中心0像素）
-    min_r = 5
+    min_r = max(50, int(max_r * 0.10))
     max_r_inner = max_r - 5
 
     thr = np.mean(ratio) + np.std(ratio) * 0.25
