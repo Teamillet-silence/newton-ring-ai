@@ -98,98 +98,75 @@ $$
     }
 
 
-def _detect_rings(gray):
-    """检测牛顿环暗环数——径向平均 + 找波谷"""
+def _compute_radial_profile(gray, cx, cy, max_r):
+    """计算径向亮度轮廓——从中心向外每个半径的像素均值"""
     h, w = gray.shape
-    cx, cy = w // 2, h // 2
-    max_r = int(min(w, h) * 0.45)
+    y, x = np.indices((h, w))
+    dist = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
 
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    profile = np.zeros(max_r, dtype=np.float32)
+    count = np.zeros(max_r, dtype=np.int32)
 
-    # 每个半径上的平均亮度（径向平均）
-    radial_profile = []
-    for r in range(1, max_r):
-        mask = np.zeros((h, w), dtype=np.uint8)
-        cv2.circle(mask, (cx, cy), r, 255, 1)
-        mean_val = cv2.mean(blur, mask)[0]
-        radial_profile.append(mean_val)
+    # 只算有效范围
+    valid = (dist < max_r)
+    y_v, x_v = y[valid], x[valid]
+    d_v = np.floor(dist[valid]).astype(np.int32)
 
-    profile = np.array(radial_profile, dtype=np.float32)
+    np.add.at(profile, d_v, gray[y_v, x_v].astype(np.float32))
+    np.add.at(count, d_v, 1)
 
-    # 平滑
-    profile = np.convolve(profile, np.ones(7) / 7, mode="same")
+    count[count == 0] = 1
+    profile /= count
 
-    # 找波谷（暗环 = 亮度局部最低点）
+    return profile
+
+
+def _find_valleys(profile):
+    """找波谷——亮度局部最小且足够深"""
+    profile = np.convolve(profile, np.ones(5) / 5, mode="same")
+
     valleys = []
     for i in range(2, len(profile) - 2):
-        if profile[i] < profile[i - 1] and profile[i] < profile[i + 1]:
-            # 谷够深才计入
-            left = max(profile[i - 2], profile[i - 1])
-            right = max(profile[i + 1], profile[i + 2])
-            depth = min(left, right) - profile[i]
-            if depth > np.std(profile) * 0.3:
+        if profile[i] <= profile[i - 1] and profile[i] <= profile[i + 1]:
+            # 谷深度 = 两侧峰值取小
+            left_peak = max(profile[i - 2], profile[i - 1])
+            right_peak = max(profile[i + 1], profile[i + 2])
+            depth = min(left_peak, right_peak) - profile[i]
+            if depth > np.std(profile) * 0.2:
                 valleys.append(i)
 
-    # 合并相邻的波谷（取较深的）
+    # 合并5px以内的相邻谷（取较深的）
     merged = []
     for v in valleys:
-        if not merged or v - merged[-1] > 3:
+        if merged and v - merged[-1] <= 5:
+            prev_idx = merged[-1]
+            if profile[v] < profile[prev_idx]:
+                merged[-1] = v
+        else:
             merged.append(v)
 
-    ring_count = max(0, len(merged))
-    return ring_count, f"检测到约 {ring_count} 个暗环"
+    return merged, profile
 
 
-@app.post("/preview-binary")
-async def preview_binary(file: UploadFile = File(...)):
-
-    contents = await file.read()
-    np_array = np.frombuffer(contents, np.uint8)
-    image = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
-
-    if image is None:
-        return {"success": False, "message": "图片读取失败"}
-
-    if len(image.shape) == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = image
-
-    # 生成径向平均图
-    h, w = gray.shape
-    cx, cy = w // 2, h // 2
-    max_r = int(min(w, h) * 0.45)
-
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    radial_profile = []
-    for r in range(1, max_r):
-        mask = np.zeros((h, w), dtype=np.uint8)
-        cv2.circle(mask, (cx, cy), r, 255, 1)
-        mean_val = cv2.mean(blur, mask)[0]
-        radial_profile.append(mean_val)
-
-    profile = np.array(radial_profile, dtype=np.float32)
-    profile = np.convolve(profile, np.ones(7) / 7, mode="same")
-
-    # 生成黑白图：波谷位置画黑圈
+def _create_binary_from_valleys(h, w, cx, cy, valley_indices):
+    """在谷位置画粗黑圆环"""
     binary = np.ones((h, w), dtype=np.uint8) * 255
-    valleys = []
-    for i in range(2, len(profile) - 2):
-        if profile[i] < profile[i - 1] and profile[i] < profile[i + 1]:
-            left = max(profile[i - 2], profile[i - 1])
-            right = max(profile[i + 1], profile[i + 2])
-            depth = min(left, right) - profile[i]
-            if depth > np.std(profile) * 0.3:
-                valleys.append(i)
+    for r in valley_indices:
+        cv2.circle(binary, (cx, cy), r, 0, 4)
+    return binary
 
-    merged = []
-    for v in valleys:
-        if not merged or v - merged[-1] > 3:
-            merged.append(v)
-            cv2.circle(binary, (cx, cy), v + 1, 0, 3)
 
-    _, buffer = cv2.imencode(".png", binary)
-    return Response(content=buffer.tobytes(), media_type="image/png")
+def _detect_rings(gray):
+    """检测牛顿环暗环数"""
+    h, w = gray.shape
+    cx, cy = w // 2, h // 2
+    max_r = int(min(w, h) * 0.45)
+
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    profile = _compute_radial_profile(blur, cx, cy, max_r)
+    valleys, smoothed = _find_valleys(profile)
+
+    return len(valleys), f"检测到约 {len(valleys)} 个暗环"
 
 
 @app.post("/preview-binary")
@@ -207,10 +184,16 @@ async def preview_binary(file: UploadFile = File(...)):
     else:
         gray = image
 
-    binary = _to_binary(gray)
+    h, w = gray.shape
+    cx, cy = w // 2, h // 2
+    max_r = int(min(w, h) * 0.45)
+
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    profile = _compute_radial_profile(blur, cx, cy, max_r)
+    valleys, smoothed = _find_valleys(profile)
+    binary = _create_binary_from_valleys(h, w, cx, cy, valleys)
 
     _, buffer = cv2.imencode(".png", binary)
-
     return Response(content=buffer.tobytes(), media_type="image/png")
 
 
