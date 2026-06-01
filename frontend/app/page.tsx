@@ -47,6 +47,7 @@ $$
   const [loading, setLoading] = useState(false);
 
   const [uploadResult, setUploadResult] = useState("");
+  const [binaryPreview, setBinaryPreview] = useState("");
 
   const chatBoxRef = useRef<HTMLDivElement>(null);
 
@@ -136,16 +137,19 @@ $$
       );
 
       setUploadResult(
-        `
-检测结果：
-
-${response.data.message}
-
-图片尺寸：
-
-${response.data.width} × ${response.data.height}
-        `
+        `检测结果：${response.data.message}`
       );
+
+      // 获取黑白预览图
+      const previewResp = await axios.post(
+        `${API_BASE}/preview-binary`,
+        formData,
+        {
+          headers: { "Content-Type": "multipart/form-data" },
+          responseType: "blob",
+        }
+      );
+      setBinaryPreview(URL.createObjectURL(previewResp.data));
 
     } catch (error) {
 
@@ -207,7 +211,15 @@ ${response.data.width} × ${response.data.height}
 
               <div className="upload-result">
 
-                <pre>{uploadResult}</pre>
+                <p>{uploadResult}</p>
+
+                {binaryPreview && (
+                  <img
+                    src={binaryPreview}
+                    alt="黑白预览"
+                    style={{ width: "100%", marginTop: 8, borderRadius: 6 }}
+                  />
+                )}
 
               </div>
             )
