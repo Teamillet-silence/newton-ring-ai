@@ -98,75 +98,63 @@ $$
     }
 
 
-def _compute_radial_profile(gray, cx, cy, max_r):
-    """计算径向亮度轮廓——从中心向外每个半径的像素均值"""
-    h, w = gray.shape
-    y, x = np.indices((h, w))
-    dist = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
-
-    profile = np.zeros(max_r, dtype=np.float32)
-    count = np.zeros(max_r, dtype=np.int32)
-
-    # 只算有效范围
-    valid = (dist < max_r)
-    y_v, x_v = y[valid], x[valid]
-    d_v = np.floor(dist[valid]).astype(np.int32)
-
-    np.add.at(profile, d_v, gray[y_v, x_v].astype(np.float32))
-    np.add.at(count, d_v, 1)
-
-    count[count == 0] = 1
-    profile /= count
-
-    return profile
-
-
-def _find_valleys(profile):
-    """找波谷——亮度局部最小且足够深"""
-    profile = np.convolve(profile, np.ones(5) / 5, mode="same")
-
-    valleys = []
-    for i in range(2, len(profile) - 2):
-        if profile[i] <= profile[i - 1] and profile[i] <= profile[i + 1]:
-            # 谷深度 = 两侧峰值取小
-            left_peak = max(profile[i - 2], profile[i - 1])
-            right_peak = max(profile[i + 1], profile[i + 2])
-            depth = min(left_peak, right_peak) - profile[i]
-            if depth > np.std(profile) * 0.2:
-                valleys.append(i)
-
-    # 合并5px以内的相邻谷（取较深的）
-    merged = []
-    for v in valleys:
-        if merged and v - merged[-1] <= 5:
-            prev_idx = merged[-1]
-            if profile[v] < profile[prev_idx]:
-                merged[-1] = v
-        else:
-            merged.append(v)
-
-    return merged, profile
-
-
-def _create_binary_from_valleys(h, w, cx, cy, valley_indices):
-    """在谷位置画粗黑圆环"""
-    binary = np.ones((h, w), dtype=np.uint8) * 255
-    for r in valley_indices:
-        cv2.circle(binary, (cx, cy), r, 0, 4)
-    return binary
-
-
 def _detect_rings(gray):
-    """检测牛顿环暗环数"""
+    """检测牛顿环暗环数：DoG→Otsu→二值径向轮廓→找峰"""
     h, w = gray.shape
     cx, cy = w // 2, h // 2
     max_r = int(min(w, h) * 0.45)
 
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    profile = _compute_radial_profile(blur, cx, cy, max_r)
-    valleys, smoothed = _find_valleys(profile)
+    # 1) DoG + Otsu 二值化
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
 
-    return len(valleys), f"检测到约 {len(valleys)} 个暗环"
+    blur1 = cv2.GaussianBlur(enhanced, (5, 5), 0)
+    blur2 = cv2.GaussianBlur(enhanced, (31, 31), 0)
+    detail = blur1 - blur2
+
+    detail = cv2.normalize(detail, None, 0, 255, cv2.NORM_MINMAX)
+    _, binary = cv2.threshold(detail, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # 黑环白底
+    if binary[cy, cx] == 0:
+        binary = 255 - binary
+
+    # 2) 形态学去噪
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+
+    # 3) 二值径向轮廓：每个半径上黑像素占比
+    y, x = np.indices((h, w))
+    dist = np.floor(np.sqrt((x - cx) ** 2 + (y - cy) ** 2)).astype(np.int32)
+
+    black_count = np.zeros(max_r, dtype=np.int32)
+    total_count = np.zeros(max_r, dtype=np.int32)
+
+    valid = (dist >= 0) & (dist < max_r)
+    black_pixels = valid & (binary == 0)
+
+    np.add.at(black_count, dist[black_pixels], 1)
+    np.add.at(total_count, dist[valid], 1)
+    total_count[total_count == 0] = 1
+
+    ratio = black_count.astype(np.float32) / total_count.astype(np.float32)
+
+    # 4) 平滑 + 找峰
+    ratio = np.convolve(ratio, np.ones(7) / 7, mode="same")
+
+    thr = np.mean(ratio) + np.std(ratio) * 0.3
+    above = ratio > thr
+
+    rings = 0
+    in_ring = False
+    for i in range(max_r):
+        if above[i] and not in_ring:
+            rings += 1
+            in_ring = True
+        elif not above[i]:
+            in_ring = False
+
+    return rings, f"检测到约 {rings} 个暗环"
 
 
 @app.post("/preview-binary")
@@ -188,12 +176,54 @@ async def preview_binary(file: UploadFile = File(...)):
     cx, cy = w // 2, h // 2
     max_r = int(min(w, h) * 0.45)
 
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    profile = _compute_radial_profile(blur, cx, cy, max_r)
-    valleys, smoothed = _find_valleys(profile)
-    binary = _create_binary_from_valleys(h, w, cx, cy, valleys)
+    # 同 _detect_rings 的前半段
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
+    blur1 = cv2.GaussianBlur(enhanced, (5, 5), 0)
+    blur2 = cv2.GaussianBlur(enhanced, (31, 31), 0)
+    detail = blur1 - blur2
+    detail = cv2.normalize(detail, None, 0, 255, cv2.NORM_MINMAX)
+    _, binary = cv2.threshold(detail, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if binary[cy, cx] == 0:
+        binary = 255 - binary
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
 
-    _, buffer = cv2.imencode(".png", binary)
+    y, x = np.indices((h, w))
+    dist = np.floor(np.sqrt((x - cx) ** 2 + (y - cy) ** 2)).astype(np.int32)
+
+    black_count = np.zeros(max_r, dtype=np.int32)
+    total_count = np.zeros(max_r, dtype=np.int32)
+    valid = (dist >= 0) & (dist < max_r)
+    black_pixels = valid & (binary == 0)
+    np.add.at(black_count, dist[black_pixels], 1)
+    np.add.at(total_count, dist[valid], 1)
+    total_count[total_count == 0] = 1
+
+    ratio = black_count.astype(np.float32) / total_count.astype(np.float32)
+    ratio = np.convolve(ratio, np.ones(7) / 7, mode="same")
+
+    thr = np.mean(ratio) + np.std(ratio) * 0.3
+    above = ratio > thr
+
+    # 找到每个环的半径范围，画实心圆环
+    binary_out = np.ones((h, w), dtype=np.uint8) * 255
+
+    in_ring = False
+    start_r = 0
+    for i in range(1, max_r):
+        if above[i] and not in_ring:
+            start_r = i
+            in_ring = True
+        elif not above[i] and in_ring:
+            # 画一个较粗的圆环
+            cv2.circle(binary_out, (cx, cy), (start_r + i) // 2, 0, max(2, i - start_r))
+            in_ring = False
+
+    if in_ring:
+        cv2.circle(binary_out, (cx, cy), (start_r + max_r) // 2, 0, max(2, max_r - start_r))
+
+    _, buffer = cv2.imencode(".png", binary_out)
     return Response(content=buffer.tobytes(), media_type="image/png")
 
 
