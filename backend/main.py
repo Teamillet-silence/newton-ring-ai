@@ -134,7 +134,7 @@ def _binary_to_radial_profile(gray, cx, cy, max_r):
 
 def _find_rings(ratio, max_r):
     """从径向轮廓中找暗环，返回每个环的半径"""
-    min_r = max(50, int(max_r * 0.10))
+    min_r = 10
     max_r_inner = max_r - 5
 
     thr = np.mean(ratio) + np.std(ratio) * 0.25
@@ -161,17 +161,21 @@ def _find_rings(ratio, max_r):
     if not peaks:
         return []
 
-    # 剔除边界峰：用高度过滤，内边界和外边界通常比真实环强很多
+    # 剔除最内圈（总是中心暗斑边界）
+    peaks = peaks[1:]
+
+    if not peaks:
+        return []
+
+    # 外边界：高度超过中位值 2 倍 或 半径在最外 15%
     heights = np.array([ratio[p] for p in peaks])
     med_h = np.median(heights)
 
     filtered = []
     for j, p in enumerate(peaks):
         h = heights[j]
-        # 边界峰高度 > 中位值 2 倍 → 排除（内边界或外边界）
         if h > med_h * 2.0:
             continue
-        # 排除半径最外 15% 的峰（外视场边界）
         if p > max_r * 0.85:
             continue
         filtered.append(p)
