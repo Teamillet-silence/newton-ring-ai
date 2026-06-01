@@ -137,9 +137,10 @@ def _find_rings(ratio, max_r):
     min_r = max(80, int(max_r * 0.14))
     max_r_inner = max_r - 5
 
-    thr = np.mean(ratio) + np.std(ratio) * 0.25
+    ratio = np.convolve(ratio, np.ones(15) / 15, mode="same")
+    thr = np.mean(ratio) + np.std(ratio) * 0.2
 
-    # 找局部峰值，相邻峰值间距至少 12px
+    # 找局部峰值，相邻峰值间距至少 20px
     peaks = []
     i = min_r
     while i < max_r_inner - 1:
@@ -151,23 +152,37 @@ def _find_rings(ratio, max_r):
             left_valley = np.min(ratio[max(min_r, peak_idx - 10):peak_idx])
             right_valley = np.min(ratio[peak_idx:min(max_r_inner, peak_idx + 10)])
             prominence = ratio[peak_idx] - min(left_valley, right_valley)
-            if prominence > np.std(ratio) * 0.25:
+            if prominence > np.std(ratio) * 0.2:
                 peaks.append(peak_idx)
 
-            i = peak_idx + 12
+            i = peak_idx + 20
         else:
             i += 1
 
     if not peaks:
         return []
 
-    # 按高度过滤：超过中位值 2 倍 → 视场边框或中心暗斑边界
-    heights = np.array([ratio[p] for p in peaks])
+    # 去掉最内（中心暗斑边界）和最外（视场边框）
+    peaks = peaks[1:-1]
+    if not peaks:
+        return []
+
+    # 合并 15px 内相邻的两个峰（保留较高的）
+    merged = [peaks[0]]
+    for p in peaks[1:]:
+        if p - merged[-1] <= 15:
+            if ratio[p] > ratio[merged[-1]]:
+                merged[-1] = p
+        else:
+            merged.append(p)
+
+    # 再按高度过滤：超过中位值 1.8 倍 → 可能是残余边界
+    heights = np.array([ratio[p] for p in merged])
     med_h = np.median(heights)
 
     filtered = []
-    for j, p in enumerate(peaks):
-        if heights[j] > med_h * 2.0:
+    for j, p in enumerate(merged):
+        if heights[j] > med_h * 1.8:
             continue
         filtered.append(p)
 
