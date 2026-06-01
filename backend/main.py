@@ -115,6 +115,62 @@ $$
 # =========================
 # 上传图片接口（牛顿环专用）
 # =========================
+def _detect_rings(gray):
+    """检测牛顿环暗环数，返回 (rings_count, message)"""
+    h, w = gray.shape
+    cx, cy = w // 2, h // 2
+
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    # 多方向径向扫描取平均
+    directions = 12
+    all_counts = []
+
+    for i in range(directions):
+        angle = 2 * np.pi * i / directions
+        dx, dy = np.cos(angle), np.sin(angle)
+        profile = []
+        max_r = int(min(w, h) * 0.45)
+
+        for r in range(5, max_r):
+            x = int(cx + r * dx)
+            y = int(cy + r * dy)
+            if 0 <= x < w and 0 <= y < h:
+                profile.append(blur[y, x])
+
+        if len(profile) < 10:
+            continue
+
+        profile = np.array(profile, dtype=np.float32)
+
+        # 归一化去掉整体亮度趋势
+        baseline = np.convolve(profile, np.ones(21) / 21, mode="same")
+        baseline[:10] = baseline[10]
+        baseline[-10:] = baseline[-10]
+        normalized = baseline - profile
+
+        # 找波峰（暗环）
+        peaks = 0
+        for j in range(1, len(normalized) - 1):
+            if normalized[j] > normalized[j - 1] and normalized[j] > normalized[j + 1]:
+                if normalized[j] > np.std(normalized) * 0.5:
+                    peaks += 1
+
+        all_counts.append(peaks)
+
+    if not all_counts:
+        return 0, "未检测到暗环"
+
+    # 去掉最高最低再平均，更稳健
+    sorted_counts = sorted(all_counts)
+    trimmed = sorted_counts[len(sorted_counts) // 4:-len(sorted_counts) // 4] if len(
+        sorted_counts) >= 4 else sorted_counts
+    ring_count = round(np.mean(trimmed))
+    ring_count = max(0, ring_count)
+
+    return ring_count, f"检测到约 {ring_count} 个暗环"
+
+
 @app.post("/upload")
 async def upload_image(file: UploadFile = File(...)):
 
@@ -125,58 +181,22 @@ async def upload_image(file: UploadFile = File(...)):
     if image is None:
         return {"success": False, "message": "图片读取失败"}
 
-    height, width = image.shape[:2]
-    center_x, center_y = width // 2, height // 2
+    h, w = image.shape[:2]
 
-    # 灰度 + 高斯模糊
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (7, 7), 0)
+    # 判断是否是彩色图，如果是，在亮度通道上检测
+    if len(image.shape) == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image
 
-    # 自适应阈值（处理颜色深浅不一的问题）
-    binary = cv2.adaptiveThreshold(
-        blur, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV, 51, 5
-    )
-
-    # 形态学去噪
-    kernel = np.ones((3, 3), np.uint8)
-    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
-
-    # 从中心向多个方向扫描，取平均值
-    directions = 8
-    total_rings = 0
-
-    for i in range(directions):
-        angle = 2 * np.pi * i / directions
-        rings = 0
-        prev = 0
-
-        for r in range(10, min(width, height) // 2, 2):
-            x = int(center_x + r * np.cos(angle))
-            y = int(center_y + r * np.sin(angle))
-
-            if x < 0 or x >= width or y < 0 or y >= height:
-                break
-
-            val = binary[y, x] // 255
-            if val != prev:
-                rings += 1
-                prev = val
-
-        total_rings += rings // 2
-
-    ring_count = round(total_rings / directions)
-    if ring_count < 0:
-        ring_count = 0
+    rings, msg = _detect_rings(gray)
 
     return {
         "success": True,
-        "rings": ring_count,
-        "message": f"检测到约 {ring_count} 个暗环",
-        "width": width,
-        "height": height
+        "rings": rings,
+        "message": msg,
+        "width": w,
+        "height": h
     }
 
 # =========================
