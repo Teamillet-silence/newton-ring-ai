@@ -167,20 +167,12 @@ def _find_rings(ratio, max_r):
     if not peaks:
         return []
 
-    merged = [peaks[0]]
-    for p in peaks[1:]:
-        if p - merged[-1] <= 1:
-            if ratio[p] > ratio[merged[-1]]:
-                merged[-1] = p
-        else:
-            merged.append(p)
-
-    # 再按高度过滤：超过中位值 1.8 倍 → 可能是残余边界
-    heights = np.array([ratio[p] for p in merged])
+    # 按高度过滤：超过中位值 1.8 倍 → 可能是残余边界
+    heights = np.array([ratio[p] for p in peaks])
     med_h = np.median(heights)
 
     filtered = []
-    for j, p in enumerate(merged):
+    for j, p in enumerate(peaks):
         if heights[j] > med_h * 1.8:
             continue
         filtered.append(p)
