@@ -161,26 +161,10 @@ def _find_rings(ratio, max_r):
     if not peaks:
         return []
 
-    # 剔除最内圈（总是中心暗斑边界）
-    peaks = peaks[1:]
+    # 剔除最内圈（中心暗斑边界）和最外圈（视场边框）
+    peaks = peaks[1:-1]
 
-    if not peaks:
-        return []
-
-    # 外边界：高度超过中位值 2 倍 或 半径在最外 15%
-    heights = np.array([ratio[p] for p in peaks])
-    med_h = np.median(heights)
-
-    filtered = []
-    for j, p in enumerate(peaks):
-        h = heights[j]
-        if h > med_h * 2.0:
-            continue
-        if p > max_r * 0.85:
-            continue
-        filtered.append(p)
-
-    return filtered
+    return peaks
 
 
 def _detect_rings(gray):
