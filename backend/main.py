@@ -133,9 +133,10 @@ def _binary_to_radial_profile(gray, cx, cy, max_r):
 
 
 def _find_rings(ratio, max_r):
-    """从径向轮廓中找暗环（跳过中心暗斑），返回每个环的半径"""
+    """从径向轮廓中找暗环（跳过中心和外边框），返回每个环的半径"""
     min_r = max(40, int(max_r * 0.08))
-    if max_r <= min_r:
+    max_r_inner = int(max_r * 0.88)  # 排除外边框 ~12%
+    if max_r_inner <= min_r:
         return []
 
     thr = np.mean(ratio) + np.std(ratio) * 0.25
@@ -143,16 +144,16 @@ def _find_rings(ratio, max_r):
     # 找局部峰值，相邻峰值间距至少 12px
     peaks = []
     i = min_r
-    while i < max_r - 1:
+    while i < max_r_inner - 1:
         if ratio[i] > thr and ratio[i] >= ratio[i - 1] and ratio[i] >= ratio[i + 1]:
             # 取局部窗口内的精确峰值
             search_start = max(min_r, i - 5)
-            search_end = min(max_r, i + 5)
+            search_end = min(max_r_inner, i + 5)
             peak_idx = search_start + np.argmax(ratio[search_start:search_end])
 
             # 检查谷底值——峰值必须比两侧谷底深 std*0.25
             left_valley = np.min(ratio[max(min_r, peak_idx - 10):peak_idx])
-            right_valley = np.min(ratio[peak_idx:min(max_r, peak_idx + 10)])
+            right_valley = np.min(ratio[peak_idx:min(max_r_inner, peak_idx + 10)])
             prominence = ratio[peak_idx] - min(left_valley, right_valley)
             if prominence > np.std(ratio) * 0.25:
                 peaks.append(peak_idx)
