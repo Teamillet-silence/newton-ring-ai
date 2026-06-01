@@ -167,10 +167,10 @@ def _find_rings(ratio, max_r):
     if not peaks:
         return []
 
-    # 合并 15px 内相邻的两个峰（保留较高的）
+    # 合并 25px 内相邻的两个峰（保留较高的），特别近的环算一个
     merged = [peaks[0]]
     for p in peaks[1:]:
-        if p - merged[-1] <= 15:
+        if p - merged[-1] <= 25:
             if ratio[p] > ratio[merged[-1]]:
                 merged[-1] = p
         else:
