@@ -116,56 +116,54 @@ $$
 # 上传图片接口（牛顿环专用）
 # =========================
 def _detect_rings(gray):
-    """检测牛顿环暗环数，返回 (rings_count, message)"""
+    """检测牛顿环暗环数"""
     h, w = gray.shape
     cx, cy = w // 2, h // 2
 
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    # 先转成清晰的黑白图
+    # 1. CLAHE 增强局部对比度
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
 
-    # 多方向径向扫描取平均
+    # 2. 高斯模糊去噪
+    blur = cv2.GaussianBlur(enhanced, (5, 5), 0)
+
+    # 3. 提取高频细节（环的边缘）
+    blur2 = cv2.GaussianBlur(enhanced, (31, 31), 0)
+    detail = blur - blur2
+
+    # 4. 增强并转成黑白
+    detail = cv2.normalize(detail, None, 0, 255, cv2.NORM_MINMAX)
+    _, binary = cv2.threshold(detail, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # 5. 多方向扫描（原方法）
     directions = 12
     all_counts = []
 
     for i in range(directions):
         angle = 2 * np.pi * i / directions
-        dx, dy = np.cos(angle), np.sin(angle)
-        profile = []
+        rings = 0
+        prev = 0
         max_r = int(min(w, h) * 0.45)
 
-        for r in range(5, max_r):
-            x = int(cx + r * dx)
-            y = int(cy + r * dy)
-            if 0 <= x < w and 0 <= y < h:
-                profile.append(blur[y, x])
+        for r in range(5, max_r, 2):
+            x = int(cx + r * np.cos(angle))
+            y = int(cy + r * np.sin(angle))
+            if x < 0 or x >= w or y < 0 or y >= h:
+                break
+            val = binary[y, x] // 255
+            if val != prev:
+                rings += 1
+                prev = val
 
-        if len(profile) < 10:
-            continue
-
-        profile = np.array(profile, dtype=np.float32)
-
-        # 归一化去掉整体亮度趋势
-        baseline = np.convolve(profile, np.ones(21) / 21, mode="same")
-        baseline[:10] = baseline[10]
-        baseline[-10:] = baseline[-10]
-        normalized = baseline - profile
-
-        # 找波峰（暗环）
-        peaks = 0
-        for j in range(1, len(normalized) - 1):
-            if normalized[j] > normalized[j - 1] and normalized[j] > normalized[j + 1]:
-                if normalized[j] > np.std(normalized) * 0.5:
-                    peaks += 1
-
-        all_counts.append(peaks)
+        all_counts.append(rings // 2)
 
     if not all_counts:
         return 0, "未检测到暗环"
 
-    # 去掉最高最低再平均，更稳健
-    sorted_counts = sorted(all_counts)
-    trimmed = sorted_counts[len(sorted_counts) // 4:-len(sorted_counts) // 4] if len(
-        sorted_counts) >= 4 else sorted_counts
-    ring_count = round(np.mean(trimmed))
+    all_counts.sort()
+    trimmed = all_counts[len(all_counts)//4:-len(all_counts)//4] if len(all_counts) >= 4 else all_counts
+    ring_count = round(sum(trimmed) / len(trimmed))
     ring_count = max(0, ring_count)
 
     return ring_count, f"检测到约 {ring_count} 个暗环"
