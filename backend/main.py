@@ -134,13 +134,11 @@ def _binary_to_radial_profile(gray, cx, cy, max_r):
 
 def _find_rings(ratio, max_r):
     """从径向轮廓中找暗环，返回每个环的半径"""
-    min_r = max(80, int(max_r * 0.14))
+    min_r = max(60, int(max_r * 0.12))
     max_r_inner = max_r - 5
 
-    ratio = np.convolve(ratio, np.ones(15) / 15, mode="same")
-    thr = np.mean(ratio) + np.std(ratio) * 0.2
+    thr = np.mean(ratio) + np.std(ratio) * 0.25
 
-    # 找局部峰值，相邻峰值间距至少 15px
     peaks = []
     i = min_r
     while i < max_r_inner - 1:
@@ -152,7 +150,7 @@ def _find_rings(ratio, max_r):
             left_valley = np.min(ratio[max(min_r, peak_idx - 10):peak_idx])
             right_valley = np.min(ratio[peak_idx:min(max_r_inner, peak_idx + 10)])
             prominence = ratio[peak_idx] - min(left_valley, right_valley)
-            if prominence > np.std(ratio) * 0.2:
+            if prominence > np.std(ratio) * 0.25:
                 peaks.append(peak_idx)
 
             i = peak_idx + 12
@@ -162,22 +160,9 @@ def _find_rings(ratio, max_r):
     if not peaks:
         return []
 
-    # 去掉最内（中心暗斑边界）和最外（视场边框）
     peaks = peaks[1:-1]
-    if not peaks:
-        return []
 
-    # 按高度过滤：超过中位值 1.8 倍 → 可能是残余边界
-    heights = np.array([ratio[p] for p in peaks])
-    med_h = np.median(heights)
-
-    filtered = []
-    for j, p in enumerate(peaks):
-        if heights[j] > med_h * 1.8:
-            continue
-        filtered.append(p)
-
-    return filtered
+    return peaks
 
 
 def _detect_rings(gray):
