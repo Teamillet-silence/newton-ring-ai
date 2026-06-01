@@ -118,9 +118,8 @@ $$
 def _detect_rings(gray):
     """检测牛顿环暗环数"""
     h, w = gray.shape
-    cx, cy = w // 2, h // 2
 
-    # 先转成清晰的黑白图
+    # ======== 先转成清晰的黑白图 ========
     # 1. CLAHE 增强局部对比度
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
     enhanced = clahe.apply(gray)
@@ -128,46 +127,35 @@ def _detect_rings(gray):
     # 2. 高斯模糊去噪
     blur = cv2.GaussianBlur(enhanced, (5, 5), 0)
 
-    # 3. 提取高频细节（环的边缘）
+    # 3. DoG 提取环的边缘
     blur2 = cv2.GaussianBlur(enhanced, (31, 31), 0)
     detail = blur - blur2
 
-    # 4. 增强并转成黑白
+    # 4. 转成黑白
     detail = cv2.normalize(detail, None, 0, 255, cv2.NORM_MINMAX)
     _, binary = cv2.threshold(detail, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
     # 确保背景白色(255)、暗环黑色(0)
+    cx, cy = w // 2, h // 2
     if binary[cy, cx] == 0:
         binary = 255 - binary
 
-    # 5. 多方向扫描（原方法）
-    directions = 12
-    all_counts = []
+    # ======== 原方法：单行扫描 + 均值阈值 ========
+    scan_line = binary[cy, cx:]
 
-    for i in range(directions):
-        angle = 2 * np.pi * i / directions
-        rings = 0
-        prev = 0
-        max_r = int(min(w, h) * 0.45)
+    # 均值阈值
+    threshold = np.mean(scan_line)
 
-        for r in range(5, max_r, 2):
-            x = int(cx + r * np.cos(angle))
-            y = int(cy + r * np.sin(angle))
-            if x < 0 or x >= w or y < 0 or y >= h:
-                break
-            val = binary[y, x] // 255
-            if val != prev:
-                rings += 1
-                prev = val
+    transitions = 0
+    prev = 1
 
-        all_counts.append(rings // 2)
+    for pixel in scan_line:
+        val = 1 if pixel < threshold else 0
+        if val != prev:
+            transitions += 1
+            prev = val
 
-    if not all_counts:
-        return 0, "未检测到暗环"
-
-    all_counts.sort()
-    trimmed = all_counts[len(all_counts)//4:-len(all_counts)//4] if len(all_counts) >= 4 else all_counts
-    ring_count = round(sum(trimmed) / len(trimmed))
+    ring_count = transitions // 2
     ring_count = max(0, ring_count)
 
     return ring_count, f"检测到约 {ring_count} 个暗环"
